@@ -10,7 +10,10 @@ namespace AiImeShell;
 public sealed class AiImeTextService : ITfTextInputProcessor
 {
     private static readonly string ModelDir =
-        Path.Combine(AppContext.BaseDirectory, "models");
+        Path.Combine(
+            Path.GetDirectoryName(typeof(AiImeTextService).Assembly.Location)
+                ?? AppContext.BaseDirectory,
+            "models");
 
     private ITfThreadMgr?    _threadMgr;
     private int              _clientId;
@@ -28,15 +31,19 @@ public sealed class AiImeTextService : ITfTextInputProcessor
             _threadMgr = ptim;
             _clientId  = tid;
 
-            // Run model loading on a background thread to avoid blocking the TSF
-            // Activate() call. The 546 MB BERT model takes several seconds to load;
-            // blocking here hangs every process that has a text-input field.
+            // Load the SKK dictionary on a background thread (6 MB, ~120K entries;
+            // takes ~300 ms). No native DLLs are loaded — pure C# parsing.
             Task.Run(() =>
             {
-                if (!AiImeCoreBridge.Initialize(ModelDir))
-                    Log($"AiImeCore init warning: {AiImeCoreBridge.GetLastError()}");
-                else
-                    Log("AiImeCore initialized");
+                try
+                {
+                    string dictPath = Path.Combine(ModelDir, "dict.skk");
+                    SkkDictionary.Load(dictPath);
+                }
+                catch (Exception ex)
+                {
+                    Log($"SkkDictionary load exception: {ex}");
+                }
             });
 
             _candidateWin = CreateCandidateWindowOnUiThread();
@@ -99,25 +106,41 @@ public sealed class AiImeTextService : ITfTextInputProcessor
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private CandidateWindow CreateCandidateWindowOnUiThread()
+    private CandidateWindow? CreateCandidateWindowOnUiThread()
     {
         CandidateWindow? win = null;
         var ready = new ManualResetEventSlim(false);
 
         _uiThread = new Thread(() =>
         {
+            bool created = false;
             try
             {
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
+                // Do NOT call Application.EnableVisualStyles() or
+                // Application.SetCompatibleTextRenderingDefault() here —
+                // they throw InvalidOperationException in host processes
+                // (Word, Excel, Notepad) that already own window handles.
                 win = new CandidateWindow();
                 win.CreateControl();
+                created = true;
+            }
+            catch (Exception ex)
+            {
+                Log($"CandidateWindow creation error: {ex.Message}");
             }
             finally
             {
                 ready.Set();
             }
-            Application.Run();
+            if (!created) return;
+            try
+            {
+                Application.Run();
+            }
+            catch (Exception ex)
+            {
+                Log($"UI thread error: {ex.Message}");
+            }
         });
         _uiThread.SetApartmentState(ApartmentState.STA);
         _uiThread.IsBackground = true;
@@ -125,9 +148,9 @@ public sealed class AiImeTextService : ITfTextInputProcessor
         _uiThread.Start();
 
         if (!ready.Wait(TimeSpan.FromSeconds(5)))
-            throw new TimeoutException("CandidateWindow creation timed out");
+            Log("CandidateWindow creation timed out — IME will run without candidate window");
         if (win == null)
-            throw new InvalidOperationException("CandidateWindow creation failed");
+            Log("CandidateWindow is null — IME will run without candidate window");
         return win;
     }
 

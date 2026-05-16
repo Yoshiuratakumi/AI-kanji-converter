@@ -24,15 +24,16 @@ internal sealed class KeyEventSink : ITfKeyEventSink, ITfCompositionSink
     private string           _context   = "";          // preceding sentences
 
     private readonly CompositionManager _comp;
-    private readonly CandidateWindow    _candidateWin;
+    private readonly CandidateWindow?   _candidateWin;
     private readonly RomajiConverter    _romaji = new();
     private ITfContext?                 _lastContext;
 
-    public KeyEventSink(int clientId, CandidateWindow candidateWin)
+    public KeyEventSink(int clientId, CandidateWindow? candidateWin)
     {
         _comp         = new CompositionManager(clientId);
         _candidateWin = candidateWin;
-        _candidateWin.Committed += OnCandidateCommitted;
+        if (_candidateWin != null)
+            _candidateWin.Committed += OnCandidateCommitted;
     }
 
     // ── ITfKeyEventSink ───────────────────────────────────────────────────────
@@ -93,17 +94,17 @@ internal sealed class KeyEventSink : ITfKeyEventSink, ITfCompositionSink
                 if (vk == NativeMethods.VK_SPACE || vk == NativeMethods.VK_DOWN)
                 {
                     pfEaten = true;
-                    _candidateWin.MoveDown();
+                    _candidateWin?.MoveDown();
                 }
                 else if (vk == NativeMethods.VK_UP)
                 {
                     pfEaten = true;
-                    _candidateWin.MoveUp();
+                    _candidateWin?.MoveUp();
                 }
                 else if (vk == NativeMethods.VK_RETURN)
                 {
                     pfEaten = true;
-                    _candidateWin.CommitSelected();
+                    _candidateWin?.CommitSelected();
                 }
                 else if (vk == NativeMethods.VK_ESCAPE)
                 {
@@ -116,8 +117,11 @@ internal sealed class KeyEventSink : ITfKeyEventSink, ITfCompositionSink
                     if (idx < _candidates.Length)
                     {
                         pfEaten = true;
-                        _candidateWin.SelectedIndex = idx;
-                        _candidateWin.CommitSelected();
+                        if (_candidateWin != null)
+                        {
+                            _candidateWin.SelectedIndex = idx;
+                            _candidateWin.CommitSelected();
+                        }
                     }
                 }
                 break;
@@ -221,7 +225,7 @@ internal sealed class KeyEventSink : ITfKeyEventSink, ITfCompositionSink
 
         if (_hiragana.Length == 0) return;
 
-        string[] dict = AiImeCoreBridge.LookupDictionary(_hiragana);
+        string[] dict = SkkDictionary.Lookup(_hiragana);
         if (dict.Length == 0)
         {
             // No candidates — show hiragana itself
@@ -241,7 +245,7 @@ internal sealed class KeyEventSink : ITfKeyEventSink, ITfCompositionSink
 
         // Show candidate window near caret (simplified: use screen center as fallback)
         var pt = GetCaretScreenPos();
-        _candidateWin.ShowAt(pt, _candidates);
+        _candidateWin?.ShowAt(pt, _candidates);
 
         _state = ImeState.Converting;
     }
@@ -276,14 +280,14 @@ internal sealed class KeyEventSink : ITfKeyEventSink, ITfCompositionSink
 
     private void CancelComposition(ITfContext pic)
     {
-        _candidateWin.Hide();
+        _candidateWin?.Hide();
         _comp.RequestEdit(pic, ec => _comp.CancelComposition(ec));
         Reset();
     }
 
     private void RevertToComposing(ITfContext pic)
     {
-        _candidateWin.Hide();
+        _candidateWin?.Hide();
         // Show hiragana again
         _comp.RequestEdit(pic, ec => _comp.SetText(ec, _hiragana));
         _state = ImeState.Composing;
